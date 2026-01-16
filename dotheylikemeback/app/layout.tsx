@@ -32,8 +32,8 @@ export default function RootLayout({
 	children: React.ReactNode;
 }>) {
 	return (
-		<Director>
-			<ClerkProvider>
+		<ClerkProvider>
+			
 				<html lang="en">
 					<body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
 						<header className="flex justify-end items-center p-4 gap-4 h-16">
@@ -45,10 +45,12 @@ export default function RootLayout({
 								<UserButton />
 							</SignedIn>
 						</header>
-						{children}
+            <Director>
+              {children}
+            </Director>
+						
 					</body>
 				</html>
-			</ClerkProvider>
-		</Director>
+		</ClerkProvider>
 	);
 }

@@ -1,23 +1,25 @@
 "use client";
 
+import { ReactNode, useEffect, useState } from "react";
 import { useUser } from "@clerk/nextjs";
-import { ReactNode, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useUserContext } from "../context/userContext";
+
+const protectedRoutes = ["/username", "/verify", "/status"];
+
 export function Director({ children }: { children: ReactNode }) {
-	const router = useRouter();
-	const { isSignedIn } = useUser();
-	const { username, verificationCode } = useUserContext();
+  const router = useRouter();
+  const pathname = usePathname();
+  const { isSignedIn } = useUser();
 
-	useEffect(() => {
-		if (!isSignedIn) {
-			router.push("/");
-		} else if (!username) {
-			router.push("/username");
-		} else if (verificationCode) {
-			router.push("/verify");
-		}
-	}, [isSignedIn, username, verificationCode, router]);
+  useEffect(() => {
+    // If the user is not signed in and the current path is protected, push to the home page.
+    if (!isSignedIn && protectedRoutes.includes(pathname)) {
+      console.log("GO HOME")
+    }
+  }, [isSignedIn, pathname, router]);
 
-    return <>{children}</>;
+  if (!isSignedIn && protectedRoutes.includes(pathname)) return null;
+
+  return <>{children}</>;
 }

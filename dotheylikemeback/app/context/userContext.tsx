@@ -1,5 +1,4 @@
 'use client';
-import { useUser } from '@clerk/nextjs';
 import { createContext, ReactNode, useContext, useState } from 'react';
 
 interface UserData {

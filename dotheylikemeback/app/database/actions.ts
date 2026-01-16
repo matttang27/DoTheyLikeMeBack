@@ -1,14 +1,12 @@
-"use server";
+'use server';
 
-import { useUser } from "@clerk/nextjs";
-import { redirect } from "next/navigation";
 import postgres from "postgres";
-import { useUserContext } from "../context/userContext";
-import { escape } from "querystring";
+import { currentUser } from '@clerk/nextjs/server'
+import { PrismaClient } from '@prisma/client'
+import * as crypto from 'node:crypto'
+const prisma = new PrismaClient()
 
 const sql = postgres(process.env.DATABASE_URL!, { ssl: "require" });
-
-const crypto = require("crypto");
 
 // Creates a hash from two users, (order-independent)
 function generatePairHash(userA: string, userB: string) {
@@ -27,8 +25,9 @@ module.exports = {
 };
 
 export async function test() {
-	const a = await sql`SELECT * FROM users`;
-	console.log(a);
+	const user = await currentUser();
+	console.log(user?.externalAccounts)
+    console.log(user?.externalId)
 }
 
 function generateVerificationCode() {
@@ -39,42 +38,162 @@ function generateVerificationCode() {
 //After the clerk login, users must login with their Instagram username as well (as it is not saved in the database for confidentiality)
 export async function login({
 	instagramUsername,
-	newCode = true,
+	newCode = true
 }: {
 	instagramUsername: string;
-	newCode: boolean;
+	newCode: boolean
 }) {
-    const { setVerificationCode } = useUserContext();
-	const { user } = useUser();
+    const user = await currentUser();
 	if (!user) {
 		return {"error": "Not signed in"}
 	}
 
-	const userHash = generateUserHash(instagramUsername, user.id);
-	const foundUser = await sql`SELECT * FROM users WHERE userHash = ${userHash}`;
+	if (user.externalAccounts.length == 0) {
+        return {"error": "Need external signIn."}
+    } 
+    const userHash = generateUserHash(instagramUsername, user.externalAccounts[0].externalId);
+    const dbUser = await prisma.users.findFirst({
+        where: {
+            userHash: userHash
+        }
+    })
 
-	if (foundUser.length > 0) {
-        if (!foundUser[0].verificationCode) {
-            redirect("/status")
+	if (dbUser) {
+        if (!dbUser.verificationCode) {
+            return {success: true}
         } else {
             if (newCode) {
                 const verificationCode = generateVerificationCode();
-                await sql`UPDATE users SET verificationCode = ${verificationCode} WHERE userHash = ${userHash}`;
-                setVerificationCode(verificationCode);
+                await prisma.users.update({
+                    where: {
+                        userHash: userHash
+                    },
+                    data: {
+                        verificationCode: parseInt(verificationCode)
+                    }
+                })
+                return {verificationCode: verificationCode}
             }
-            redirect("/verify")
+            return {error: "Verification code not receieved"}
         }
     } else {
-        const usernameTaken = await sql`COUNT(*) FROM usernameList WHERE username = ${instagramUsername}`;
-        if (usernameTaken[0].count > 0) {
+        const usernameTaken = await prisma.usernameList.count({
+            where: {
+                username: instagramUsername
+            }
+        })
+        if (usernameTaken > 0) {
             return {error: "Username already taken"}
         } else {
             const verificationCode = generateVerificationCode();
-            await sql`INSERT INTO users (userHash, instagramUsername, verificationCode) VALUES (${userHash}, ${instagramUsername}, ${verificationCode})`;
-            setVerificationCode(verificationCode);
-            redirect("/verify")
+            await prisma.users.create({
+                data: {
+                    userHash: userHash,
+                    username: instagramUsername,
+                    verificationCode: parseInt(verificationCode),
+                    timeCreated: new Date(),
+                    timeCode: new Date(),
+                }
+            })
+            return {verificationCode: verificationCode}
         }
     }
+}
+
+export async function submitCrush({
+    username,
+    crushUsername
+}: {
+    username: string,
+    crushUsername: string
+}) {
+    const user = await currentUser();
+
+    if (!user) {
+        return {"error": "Not signed in"}
+    }
+    if (user.externalAccounts.length == 0) {
+        return {"error": "Need external signIn."}
+    } 
+    const userHash = generateUserHash(username, user.externalAccounts[0].externalId);
+    const pairHash = generatePairHash(username, crushUsername);
+    const dbUser = await prisma.users.findFirst({
+        where: {
+            userHash: userHash
+        }
+    })
+
+    if (!dbUser) {
+        return {error: "User not found"}
+    } else if (dbUser.verificationCode) {
+        return {error: "User not verified"}
+    } else if (dbUser.lastSubmit && (new Date().getTime() - dbUser.lastSubmit.getTime()) < 1000 * 60 * 60 * 24 * 30) {
+        return {error: "You can only submit a crush once every 30 days"}
+    }
+
+    let match = await prisma.users.findFirst({
+        where: {
+            matchHash: pairHash,
+            NOT: {
+                userHash: userHash
+            }
+        }
+    })
+
+    if (match) {
+        await prisma.users.update({
+            where: {
+                userHash: match.userHash
+            },
+            data: {
+                matchHash: "-1"
+            }
+        })
+        await prisma.users.update({
+            where: {
+                userHash: userHash
+            },
+            data: {
+                matchHash: "-1"
+            }
+        })
+    } else {
+        await prisma.users.update({
+            where: {
+                userHash: userHash
+            },
+            data: {
+                lastSubmit: new Date(),
+                matchHash: pairHash
+            }
+        })
+    }
+    return {success: true}
+
+}
+
+export async function getStatus(username: string) {
+    const user = await currentUser();
+    if (!user) {
+        return {"error": "Not signed in"}
+    }
+    if (user.externalAccounts.length == 0) {
+        return {"error": "Need external signIn."}
+    } 
+    const userHash = generateUserHash(username, user.externalAccounts[0].externalId);
+    const dbUser = await prisma.users.findFirst({
+        where: {
+            userHash: userHash
+        }
+    })
+
+    if (!dbUser) {
+        return {error: "User not found"}
+    } else if (dbUser.verificationCode) {
+        return {error: "User not verified"}
+    }
+
+    return {success: true, matched: dbUser.matchHash === "-1"}
 }
 
 //simulate instagram bot confirmation
